@@ -1,15 +1,15 @@
-OpenMP: 12 thread(s) | window=25  k=0.080  R=128.0
+OpenMP: 12 thread(s) | window=45  k=0.050  R=1024.0
 
 Found 2 image(s) in imageDirectory
 
 [1/2] don1.jpg  ->  don1.png
   [sequential] 0.0063 s
-  [parallel] 0.0016 s  (12 thread(s))
-  total: 0.0425 s
+  [parallel] 0.0012 s  (12 thread(s))
+  total: 0.0434 s
 
 [2/2] don2.jpg  ->  don2.png
   [sequential] 0.0061 s
-  [parallel] 0.0036 s  (12 thread(s))
-  total: 0.0409 s
+  [parallel] 0.0016 s  (12 thread(s))
+  total: 0.0378 s
 
 Done: 2/2 succeeded.
