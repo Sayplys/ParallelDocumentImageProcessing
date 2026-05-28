@@ -1,0 +1,6 @@
+OpenMP: 12 thread(s) | window=35  k=0.050  R=128.0
+
+image.jpg
+  [sequential] 0.0098 s
+  [parallel] 0.0021 s  (12 thread(s))
+  total: 0.0511 s

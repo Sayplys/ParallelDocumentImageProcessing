@@ -53,3 +53,13 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# project build output
+sauvola
+
+# auto-generated dependency files
+src/*.d
+
+# test images
+*.pgm
+*.ppm
