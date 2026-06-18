@@ -1,15 +1,15 @@
-OpenMP: 12 thread(s) | window=45  k=0.050  R=1024.0
+MPI: 12 nodes | OpenMP: 12 thread(s)/node | window=45  k=0.050  R=1024.0
 
 Found 2 image(s) in imageDirectory
 
 [1/2] don1.jpg  ->  don1.png
-  [sequential] 0.0063 s
-  [parallel] 0.0012 s  (12 thread(s))
-  total: 0.0434 s
+  [sequential] 0.0066 s
+  [MPI + OpenMP] 0.0016 s (1 machines/nodes)
+  total: 0.0445 s
 
 [2/2] don2.jpg  ->  don2.png
-  [sequential] 0.0061 s
-  [parallel] 0.0016 s  (12 thread(s))
-  total: 0.0378 s
+  [sequential] 0.0065 s
+  [MPI + OpenMP] 0.0015 s (1 machines/nodes)
+  total: 0.0372 s
 
 Done: 2/2 succeeded.

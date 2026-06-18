@@ -6,6 +6,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <omp.h>
+#include <mpi.h>
 
 #include "image.h"
 #include "sauvola.h"
@@ -58,25 +59,38 @@ static void replace_ext_png(const char *name, char *out_name, size_t size) {
 
 static int process_one(const char *in_path, const char *out_path,
                         const SauvolaParams *p, int benchmark) {
-    double t0 = omp_get_wtime();
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    
+    double t0 = 0;
+    if (rank == 0) t0 = MPI_Wtime();
 
-    GrayImage *img = image_load(in_path);
-    if (!img) return -1;
+    GrayImage *img = NULL;
+    int valid = 0;
+    if (rank == 0) {
+        img = image_load(in_path);
+        valid = (img != NULL);
+    }
 
-    if (benchmark) {
+    MPI_Bcast(&valid, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (!valid) return -1;
+
+    if (benchmark && rank == 0) {
         GrayImage *seq = sauvola_binarize_seq(img, p);
         image_free(seq);
     }
 
     GrayImage *out = sauvola_binarize(img, p);
-    image_free(img);
-    if (!out) return -1;
 
-    int ret = image_save(out_path, out);
-    image_free(out);
-
-    printf("  total: %.4f s\n", omp_get_wtime() - t0);
-    return ret;
+    if (rank == 0) {
+        image_free(img);
+        if (!out) return -1;
+        int ret = image_save(out_path, out);
+        image_free(out);
+        printf("  total: %.4f s\n", MPI_Wtime() - t0);
+        return ret;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------- directory mode */
@@ -105,46 +119,71 @@ static int collect_images(const char *dir_path, char ***names_out) {
 
 static int process_directory(const char *in_dir, const char *out_dir,
                               const SauvolaParams *p, int benchmark) {
-    if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
-        perror(out_dir); return -1;
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    
+    int count = 0;
+    char **names = NULL;
+
+    if (rank == 0) {
+        if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
+            perror(out_dir);
+        }
+        count = collect_images(in_dir, &names);
     }
 
-    char **names = NULL;
-    int count = collect_images(in_dir, &names);
+    MPI_Bcast(&count, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (count < 0) return -1;
     if (count == 0) {
-        fprintf(stderr, "No supported image files found in: %s\n", in_dir);
+        if (rank == 0) fprintf(stderr, "No supported image files found in: %s\n", in_dir);
         return 0;
     }
 
-    printf("Found %d image(s) in %s\n\n", count, in_dir);
+    if (rank == 0) printf("Found %d image(s) in %s\n\n", count, in_dir);
 
     int errors = 0;
     for (int i = 0; i < count; i++) {
         char in_path[4096], out_name[256], out_path[4096];
 
-        snprintf(in_path, sizeof(in_path), "%s/%s", in_dir, names[i]);
-        replace_ext_png(names[i], out_name, sizeof(out_name));
-        snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, out_name);
+        if (rank == 0) {
+            snprintf(in_path, sizeof(in_path), "%s/%s", in_dir, names[i]);
+            replace_ext_png(names[i], out_name, sizeof(out_name));
+            snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, out_name);
+            printf("[%d/%d] %s  ->  %s\n", i + 1, count, names[i], out_name);
+        }
 
-        printf("[%d/%d] %s  ->  %s\n", i + 1, count, names[i], out_name);
-
-        if (process_one(in_path, out_path, p, benchmark) != 0)
+        if (process_one(rank == 0 ? in_path : NULL, 
+                        rank == 0 ? out_path : NULL, p, benchmark) != 0) {
             errors++;
+        }
 
-        printf("\n");
-        free(names[i]);
+        if (rank == 0) {
+            printf("\n");
+            free(names[i]);
+        }
     }
-    free(names);
 
-    printf("Done: %d/%d succeeded.\n", count - errors, count);
+    if (rank == 0) {
+        free(names);
+        printf("Done: %d/%d succeeded.\n", count - errors, count);
+    }
     return errors ? -1 : 0;
 }
 
 /* --------------------------------------------------------------- main */
 
 int main(int argc, char *argv[]) {
-    if (argc < 3) { usage(argv[0]); return EXIT_FAILURE; }
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
+    
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    if (argc < 3) { 
+        if (rank == 0) usage(argv[0]); 
+        MPI_Finalize();
+        return EXIT_FAILURE; 
+    }
 
     const char *input  = argv[1];
     const char *output = argv[2];
@@ -165,27 +204,43 @@ int main(int argc, char *argv[]) {
         } else if (!strcmp(argv[i], "-b")) {
             benchmark = 1;
         } else if (!strcmp(argv[i], "-h")) {
-            usage(argv[0]); return EXIT_SUCCESS;
+            if (rank == 0) usage(argv[0]);
+            MPI_Finalize();
+            return EXIT_SUCCESS;
         } else {
-            fprintf(stderr, "Unknown option: %s\n\n", argv[i]);
-            usage(argv[0]); return EXIT_FAILURE;
+            if (rank == 0) fprintf(stderr, "Unknown option: %s\n\n", argv[i]);
+            MPI_Finalize();
+            return EXIT_FAILURE;
         }
     }
 
-    printf("OpenMP: %d thread(s) | window=%d  k=%.3f  R=%.1f\n\n",
-           omp_get_max_threads(), params.window_size, params.k, params.r);
-
-    /* Auto-detect file vs directory */
-    struct stat st;
-    if (stat(input, &st) != 0) { perror(input); return EXIT_FAILURE; }
-
-    if (S_ISDIR(st.st_mode)) {
-        return process_directory(input, output, &params, benchmark) == 0
-               ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (rank == 0) {
+        printf("MPI: %d nodes | OpenMP: %d thread(s)/node | window=%d  k=%.3f  R=%.1f\n\n",
+               omp_get_max_threads(), omp_get_max_threads(), params.window_size, params.k, params.r);
     }
 
-    /* Single-file mode */
-    printf("%s\n", input);
-    return process_one(input, output, &params, benchmark) == 0
-           ? EXIT_SUCCESS : EXIT_FAILURE;
+    struct stat st;
+    int is_dir = 0;
+    if (rank == 0) {
+        if (stat(input, &st) != 0) { perror(input); is_dir = -1; }
+        else if (S_ISDIR(st.st_mode)) is_dir = 1;
+    }
+    
+    MPI_Bcast(&is_dir, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    if (is_dir == -1) {
+        MPI_Finalize();
+        return EXIT_FAILURE;
+    }
+
+    int ret = 0;
+    if (is_dir == 1) {
+        ret = process_directory(input, output, &params, benchmark);
+    } else {
+        if (rank == 0) printf("%s\n", input);
+        ret = process_one(input, output, &params, benchmark);
+    }
+
+    MPI_Finalize();
+    return ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -1,5 +1,6 @@
 #include "sauvola.h"
 
+#include <mpi.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,31 +80,79 @@ static void process_row(const uint8_t *src, uint8_t *dst,
 /* ---------------------------------------------------- public API: parallel */
 
 GrayImage *sauvola_binarize(const GrayImage *src, const SauvolaParams *p) {
-    int W    = src->width;
-    int H    = src->height;
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int W = 0, H = 0;
+    if (rank == 0) {
+        W = src->width;
+        H = src->height;
+    }
+
+    MPI_Bcast(&W, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&H, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    uint8_t *raw_data = NULL;
+    if (rank == 0) {
+        raw_data = src->data;
+    } else {
+        raw_data = malloc((size_t)W * H);
+    }
+    MPI_Bcast(raw_data, W * H, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+
     int half = p->window_size / 2;
 
     long long *isum = NULL, *isq = NULL;
-    if (build_integral(src->data, W, H, &isum, &isq) != 0) {
-        fprintf(stderr, "sauvola: out of memory (integral tables)\n");
-        return NULL;
+    if (build_integral(raw_data, W, H, &isum, &isq) != 0) {
+        if (rank == 0) fprintf(stderr, "sauvola: out of memory (integral tables)\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    GrayImage *dst = image_alloc(W, H);
-    if (!dst) { free(isum); free(isq); return NULL; }
+    int rows_per_proc = H / size;
+    int remainder = H % size;
+    int *sendcounts = malloc(size * sizeof(int));
+    int *displs = malloc(size * sizeof(int));
+    int sum = 0;
 
-    double t0 = omp_get_wtime();
+    for (int i = 0; i < size; i++) {
+        int r = rows_per_proc + (i < remainder ? 1 : 0);
+        sendcounts[i] = r * W;
+        displs[i] = sum;
+        sum += sendcounts[i];
+    }
+
+    int my_rows = rows_per_proc + (rank < remainder ? 1 : 0);
+    int my_offset = displs[rank] / W;
+
+    uint8_t *local_dst = malloc((size_t)my_rows * W);
+    double t0 = MPI_Wtime();
 
     #pragma omp parallel for schedule(static)
-    for (int y = 0; y < H; y++)
-        process_row(src->data, dst->data, isum, isq,
-                    W, H, y, half, p->k, p->r);
+    for (int i = 0; i < my_rows; i++) {
+        int global_y = my_offset + i;
+        process_row(raw_data, local_dst, isum, isq, W, H, global_y, half, p->k, p->r);
+    }
 
-    printf("  [parallel] %.4f s  (%d thread(s))\n",
-           omp_get_wtime() - t0, omp_get_max_threads());
+    GrayImage *dst = NULL;
+    if (rank == 0) dst = image_alloc(W, H);
 
+    MPI_Gatherv(local_dst, my_rows * W, MPI_UINT8_T,
+                rank == 0 ? dst->data : NULL, sendcounts, displs,
+                MPI_UINT8_T, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        printf("  [MPI + OpenMP] %.4f s (%d machines/nodes)\n",
+               MPI_Wtime() - t0, size);
+    }
+
+    free(local_dst);
+    free(sendcounts);
+    free(displs);
     free(isum);
     free(isq);
+    if (rank != 0) free(raw_data);
+
     return dst;
 }
 

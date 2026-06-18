@@ -1,4 +1,4 @@
-CC      = gcc
+CC      = mpicc
 CFLAGS  = -Wall -Wextra -O2 -march=native -fopenmp -Isrc -Ivendor -MMD -MP
 LDFLAGS = -fopenmp -lm
 
@@ -21,7 +21,6 @@ $(TARGET): $(OBJS)
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Download stb headers if missing
 $(STB_IMG):
 	mkdir -p vendor
 	curl -fsSL $(STB_URL)/stb_image.h -o $@
