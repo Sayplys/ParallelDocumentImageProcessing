@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  master:
+    build: .
+    container_name: mpi_master
+    hostname: master
+    volumes:
+      - .:/app
+    deploy:
+       resources:
+         limits:
+           cpus: '3.0'
+
+  worker1:
+    build: .
+    container_name: mpi_worker1
+    hostname: worker1
+    volumes:
+      - .:/app
+    deploy:
+       resources:
+         limits:
+           cpus: '3.0'
+
+  worker2:
+    build: .
+    container_name: mpi_worker2
+    hostname: worker2
+    volumes:
+      - .:/app
+    deploy:
+       resources:
+         limits:
+           cpus: '3.0'
+
+  worker3:
+    build: .
+    container_name: mpi_worker3
+    hostname: worker3
+    volumes:
+      - .:/app
+    deploy:
+       resources:
+         limits:
+           cpus: '3.0'
