@@ -1,5 +1,4 @@
 #include "sauvola.h"
-
 #include <mpi.h>
 #include <math.h>
 #include <stdio.h>
@@ -8,13 +7,6 @@
 
 /* -------------------------------------------------- integral image helpers */
 
-/*
- * Build summed-area tables so that mean and variance over any rectangular
- * window can be computed in O(1) (independent of window size).
- *
- * isum[y*W+x] = Σ src[r*W+c]   for 0≤r≤y, 0≤c≤x
- * isq [y*W+x] = Σ src²          (same bounds)
- */
 static int build_integral(const uint8_t *src, int W, int H,
                            long long **isum_out, long long **isq_out) {
     size_t n     = (size_t)W * H;
@@ -38,7 +30,6 @@ static int build_integral(const uint8_t *src, int W, int H,
     return 0;
 }
 
-/* Sum of pixels in rectangle [x1,x2] × [y1,y2] (inclusive). */
 static inline long long rect_sum(const long long *tbl, int W,
                                   int x1, int y1, int x2, int y2) {
     long long v = tbl[y2 * W + x2];
@@ -50,10 +41,7 @@ static inline long long rect_sum(const long long *tbl, int W,
 
 /* -------------------------------------------- core binarization (one row) */
 
-/*
- * Classify all pixels in row `y` and store results in dst.
- */
-static void process_row(const uint8_t *src, uint8_t *dst,
+static void process_row(const uint8_t *src, uint8_t *dst_row,
                          const long long *isum, const long long *isq,
                          int W, int H, int y,
                          int half, double k, double r) {
@@ -73,7 +61,7 @@ static void process_row(const uint8_t *src, uint8_t *dst,
         double std  = (var > 0.0) ? sqrt(var) : 0.0;
 
         double threshold = mean * (1.0 + k * (std / r - 1.0));
-        dst[y * W + x] = ((double)src[y * W + x] < threshold) ? 0 : 255;
+        dst_row[x] = ((double)src[y * W + x] < threshold) ? 0 : 255;
     }
 }
 
@@ -98,8 +86,9 @@ GrayImage *sauvola_binarize(const GrayImage *src, const SauvolaParams *p) {
         raw_data = src->data;
     } else {
         raw_data = malloc((size_t)W * H);
+        if (!raw_data) MPI_Abort(MPI_COMM_WORLD, 1);
     }
-    MPI_Bcast(raw_data, W * H, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+    MPI_Bcast(raw_data, W * H, MPI_BYTE, 0, MPI_COMM_WORLD);
 
     int half = p->window_size / 2;
 
@@ -126,24 +115,26 @@ GrayImage *sauvola_binarize(const GrayImage *src, const SauvolaParams *p) {
     int my_offset = displs[rank] / W;
 
     uint8_t *local_dst = malloc((size_t)my_rows * W);
+    if (!local_dst && my_rows > 0) MPI_Abort(MPI_COMM_WORLD, 2);
+
     double t0 = MPI_Wtime();
 
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < my_rows; i++) {
         int global_y = my_offset + i;
-        process_row(raw_data, local_dst, isum, isq, W, H, global_y, half, p->k, p->r);
+        process_row(raw_data, &local_dst[i * W], isum, isq, W, H, global_y, half, p->k, p->r);
     }
 
     GrayImage *dst = NULL;
     if (rank == 0) dst = image_alloc(W, H);
 
-    MPI_Gatherv(local_dst, my_rows * W, MPI_UINT8_T,
+    MPI_Gatherv(local_dst, my_rows * W, MPI_BYTE,
                 rank == 0 ? dst->data : NULL, sendcounts, displs,
-                MPI_UINT8_T, 0, MPI_COMM_WORLD);
+                MPI_BYTE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        printf("  [MPI + OpenMP] %.4f s (%d machines/nodes)\n",
-               MPI_Wtime() - t0, size);
+        printf("  [MPI + OpenMP] %.4f s  (%d thread(s)/node)\n",
+               MPI_Wtime() - t0, omp_get_max_threads());
     }
 
     free(local_dst);
@@ -175,7 +166,7 @@ GrayImage *sauvola_binarize_seq(const GrayImage *src, const SauvolaParams *p) {
     double t0 = omp_get_wtime();
 
     for (int y = 0; y < H; y++)
-        process_row(src->data, dst->data, isum, isq,
+        process_row(src->data, &dst->data[y * W], isum, isq,
                     W, H, y, half, p->k, p->r);
 
     printf("  [sequential] %.4f s\n", omp_get_wtime() - t0);

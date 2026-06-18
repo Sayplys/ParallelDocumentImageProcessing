@@ -46,7 +46,6 @@ static int is_image_ext(const char *name) {
            !strcasecmp(ext, ".tga");
 }
 
-/* Replace or append .png extension, writing result into out_name[size]. */
 static void replace_ext_png(const char *name, char *out_name, size_t size) {
     strncpy(out_name, name, size - 1);
     out_name[size - 1] = '\0';
@@ -82,15 +81,21 @@ static int process_one(const char *in_path, const char *out_path,
 
     GrayImage *out = sauvola_binarize(img, p);
 
+    int ret = 0;
     if (rank == 0) {
         image_free(img);
-        if (!out) return -1;
-        int ret = image_save(out_path, out);
-        image_free(out);
-        printf("  total: %.4f s\n", MPI_Wtime() - t0);
-        return ret;
+        if (out) {
+            ret = image_save(out_path, out);
+            image_free(out);
+        } else {
+            ret = -1;
+        }
+        if (ret == 0) printf("  total: %.4f s\n", MPI_Wtime() - t0);
     }
-    return 0;
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    return ret;
 }
 
 /* ------------------------------------------------------- directory mode */
@@ -176,8 +181,9 @@ int main(int argc, char *argv[]) {
     int provided;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided);
     
-    int rank;
+    int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     if (argc < 3) { 
         if (rank == 0) usage(argv[0]); 
@@ -216,7 +222,7 @@ int main(int argc, char *argv[]) {
 
     if (rank == 0) {
         printf("MPI: %d nodes | OpenMP: %d thread(s)/node | window=%d  k=%.3f  R=%.1f\n\n",
-               omp_get_max_threads(), omp_get_max_threads(), params.window_size, params.k, params.r);
+               size, omp_get_max_threads(), params.window_size, params.k, params.r);
     }
 
     struct stat st;
