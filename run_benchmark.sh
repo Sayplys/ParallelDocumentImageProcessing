@@ -7,7 +7,7 @@ OUTPUT="results/benchmark_out.png"
 # Configurações do Benchmark
 RUNS=5                 # Quantas vezes cada configuração vai rodar
 NODES=(1 2 3 4 6)      # Quantidade de processos MPI (-n)
-THREADS=(1 2 4 6 12)   # Quantidade de threads OpenMP (-t)
+THREADS=(1 2 4 6 12 64)   # Quantidade de threads OpenMP (-t)
 
 # Nome do arquivo de saída
 CSV_FILE="benchmark_results.csv"
@@ -26,7 +26,7 @@ for n in "${NODES[@]}"; do
         echo -n "Testando Nós (MPI): $n | Threads (OpenMP): $t ... "
         
         for ((i=1; i<=RUNS; i++)); do
-            OUT=$(mpirun -n $n ./sauvola $INPUT $OUTPUT -t $t -w 25)
+            OUT=$(mpirun --bind-to none -n $n ./sauvola $INPUT $OUTPUT -t $t -w 25)
             
             CALC_TIME=$(echo "$OUT" | grep "\[MPI + OpenMP\]" | awk '{print $4}')
             TOTAL_TIME=$(echo "$OUT" | grep "total:" | awk '{print $2}')
