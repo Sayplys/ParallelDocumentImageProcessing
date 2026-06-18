@@ -16,7 +16,7 @@ STB_URL   = https://raw.githubusercontent.com/nothings/stb/master
 all: $(STB_IMG) $(STB_WRITE) $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(LDFLAGS) 
 
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
